@@ -1460,6 +1460,8 @@ class USatm1976Comp(om.ExplicitComponent):
                                   'it will be converted to geopotential based on Equation 19 in the original standard.')
         self.options.declare('output_dsos_dh', types=bool, default=False,
                              desc='If true, the derivative of the speed of sound will be added as an output')
+        self.options.declare('isa_delT', types=int, default=0,
+                             desc='Deviation from ISA standard temperature, deg R') # ADDED
 
     def setup(self):
         """
@@ -1502,6 +1504,7 @@ class USatm1976Comp(om.ExplicitComponent):
         table_points = USatm1976Data.alt
         h = inputs['h']
         output_dsos_dh = self.options['output_dsos_dh']
+        delT = self.options['isa_delT'] # ADDED
 
         if self._geodetic:
             h = h / (self._R0 + h) * self._R0  # Equation 19 from the original standard.
@@ -1514,25 +1517,29 @@ class USatm1976Comp(om.ExplicitComponent):
 
         coeffs = USatm1976Data.akima_T[idx]
         T = coeffs[:, 0] + dx * (coeffs[:, 1] + dx * (coeffs[:, 2] + dx * coeffs[:, 3]))
-        outputs['temp'] = T
+        outputs['temp'] = T + delT # ADDED TEMP CORRECTION, WAS "outputs['temp'] = T"
 
         coeffs = USatm1976Data.akima_P[idx]
-        outputs['pres'] = coeffs[:, 0] + dx * (coeffs[:, 1] + dx * (coeffs[:, 2] + dx * coeffs[:, 3]))
+        pres = coeffs[:, 0] + dx * (coeffs[:, 1] + dx * (coeffs[:, 2] + dx * coeffs[:, 3]))
+        outputs['pres'] = pres #
 
         coeffs = USatm1976Data.akima_rho[idx]
-        outputs['rho'] = coeffs[:, 0] + dx * (coeffs[:, 1] + dx * (coeffs[:, 2] + dx * coeffs[:, 3]))
-        outputs['drhos_dh'] = coeffs[:, 1] + dx * (2.0 * coeffs[:, 2] + 3.0 * coeffs[:, 3] * dx)
+        rho = coeffs[:, 0] + dx * (coeffs[:, 1] + dx * (coeffs[:, 2] + dx * coeffs[:, 3]))
+        outputs['rho'] = rho * T / (T + delT) # ADDED TEMP CORRECTION, WAS "outputs['rho'] = rho"
+        drhos_dh = coeffs[:, 1] + dx * (2.0 * coeffs[:, 2] + 3.0 * coeffs[:, 3] * dx)
+        outputs['drhos_dh'] = drhos_dh  * T / (T + delT) # ADDED TEMP CORRECTION, WAS "outputs['drhos_dh'] = drhos_dh" IS THIS RIGHT?
 
         coeffs = USatm1976Data.akima_viscosity[idx]
-        outputs['viscosity'] = coeffs[:, 0] + dx * (coeffs[:, 1] + dx * (coeffs[:, 2] + dx * coeffs[:, 3]))
+        viscosity = coeffs[:, 0] + dx * (coeffs[:, 1] + dx * (coeffs[:, 2] + dx * coeffs[:, 3]))
+        outputs['viscosity'] = viscosity * ((T + 198.72)/(T + delT + 198.72)) * (T / (T + delT))**1.5 # ADDED TEMP CORRECTION, WAS "outputs['viscosity'] = viscosity". SUTHERLAND'S FORMULA
 
-        outputs['sos'] = np.sqrt(self._K * outputs['temp'])
+        outputs['sos'] = np.sqrt(self._K * outputs['temp']) #
         if output_dsos_dh:
             coeffs = USatm1976Data.akima_dT[idx]
             dT_dh = (coeffs[:, 0] + dx * (coeffs[:, 1] + dx * (coeffs[:, 2] + dx * coeffs[:, 3]))).ravel()
             outputs['dsos_dh'] = (0.5 / np.sqrt(self._K * T) * dT_dh * self._K)
 
-    def compute_partials(self, inputs, partials):
+    def compute_partials(self, inputs, partials): # MAY NEED TO CORRECT THIS AS WELL
         """
         Compute sub-jacobian parts. The model is assumed to be in an unscaled state.
 
